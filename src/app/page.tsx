@@ -3,10 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as ort from "onnxruntime-web";
 
-// Map 6 model output indices → 3 display classes
-// Model indices: 0=Early-Turning, 1=Green, 2=Late-Turning, 3=Red, 4=Turning, 5=White
-const MODEL_TO_DISPLAY = ["Turning", "Unripe", "Ripe", "Ripe", "Turning", "Turning"];
-const MODEL_NUM_CLASSES = 6;
+// 3 classes: Ripe, Turning, Unripe (trained directly)
 
 // Color & emoji mapping for 3 display classes
 const CLASS_STYLES: Record<string, { color: string; emoji: string; bg: string; border: string; barColor: string; boxColor: string }> = {
@@ -48,7 +45,7 @@ export default function Home() {
   // --- Load ONNX Model ---
   async function loadModel() {
     const session = await ort.InferenceSession.create(
-      "/models/strawberry1.onnx",
+      "/models/best_3class.onnx",
       { executionProviders: ["wasm"] }
     );
     sessionRef.current = session;
@@ -109,7 +106,7 @@ export default function Home() {
   ): Detection[] {
     const data = output.data as Float32Array;
     const numBoxes = output.dims[2];
-    const numClasses = MODEL_NUM_CLASSES; // always 6 from model
+    const numClasses = classes.length;
     const confThreshold = 0.25;
     const iouThreshold = 0.45;
     const boxes: Detection[] = [];
@@ -128,7 +125,7 @@ export default function Home() {
       }
       if (maxScore < confThreshold) continue;
 
-      const displayName = MODEL_TO_DISPLAY[classId] || "Unknown";
+      const displayName = classes[classId] || "Unknown";
 
       boxes.push({
         x1: (cx - w / 2 - lb.dx) / lb.scale,
