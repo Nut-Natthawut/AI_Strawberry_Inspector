@@ -2,9 +2,12 @@ import onnxruntime as ort
 import numpy as np
 import sys
 
-model_path = "public/models/strawberry1.onnx"
+model_path = "public/models/best_3class.onnx"
 try:
     session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+    meta = session.get_modelmeta()
+    
+    print("Metadata classes:", meta.custom_metadata_map.get("names", "Not found"))
     print("Inputs:")
     for inp in session.get_inputs():
         print(f"  name: {inp.name}, shape: {inp.shape}, type: {inp.type}")
