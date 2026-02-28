@@ -107,8 +107,8 @@ export default function Home() {
     const data = output.data as Float32Array;
     const numBoxes = output.dims[2];
     const numClasses = classes.length;
-    const confThreshold = 0.25;
-    const iouThreshold = 0.45;
+    const confThreshold = 0.4; // ⬆️ เพิ่มให้จับเฉพาะลูกที่มั่นใจ ลดมั่ว
+    const iouThreshold = 0.25; // ⬇️ ลดให้ซ้อนทับกันได้น้อยลง เคลียร์ box ซ้ำ
     const boxes: Detection[] = [];
 
     for (let i = 0; i < numBoxes; i++) {
