@@ -22,6 +22,18 @@ interface Detection {
   classId: number; className: string; score: number;
 }
 
+// --- Tracking Structure ---
+interface Track {
+  id: number;
+  classId: number;
+  className: string;
+  cx: number;
+  cy: number;
+  lastSeenTime: number; // timestamp
+  framesVisible: number;
+  color: string;
+}
+
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null); // transparent overlay for boxes
@@ -33,12 +45,32 @@ export default function Home() {
   const [detectionCount, setDetectionCount] = useState<number>(0);
   const [classCounts, setClassCounts] = useState<Record<string, number>>({ Ripe: 0, Turning: 0, Unripe: 0 });
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
-  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [showSummary, setShowSummary] = useState<boolean>(false);
+
+  // Tracking unique strawberries seen over the entire session
+  const [sessionStats, setSessionStats] = useState({
+    Ripe: 0,
+    Turning: 0,
+    Unripe: 0,
+    framesAnalyzed: 0,
+    totalUniqueDetected: 0,
+    totalRipe: 0,
+    totalTurning: 0,
+    totalUnripe: 0
+  });
 
   const sessionRef = useRef<ort.InferenceSession | null>(null);
   const classesRef = useRef<string[] | null>(null);
   const inferenceRunningRef = useRef<boolean>(false);
   const detectionsRef = useRef<Detection[]>([]);
+  const activeTracksRef = useRef<Track[]>([]);
+  const trackIdCounterRef = useRef<number>(1);
+  const totalValidTracksRef = useRef<number>(0);
+
+  // Accumulated unique totals by class
+  const totalRipeRef = useRef<number>(0);
+  const totalTurningRef = useRef<number>(0);
+  const totalUnripeRef = useRef<number>(0);
   const animFrameRef = useRef<number>(0);
   const inferenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -167,7 +199,6 @@ export default function Home() {
     if (!session || !classes || !video || video.videoWidth === 0) return;
 
     inferenceRunningRef.current = true;
-    setIsProcessing(true);
 
     try {
       const { tensor, scale, dx, dy } = preprocessToTensor(video);
@@ -179,42 +210,140 @@ export default function Home() {
 
       detectionsRef.current = detections;
 
-      if (detections.length > 0) {
-        const top = detections.reduce((a, b) => (a.score > b.score ? a : b));
-        setTopDetection(top.className);
-        setConf(top.score);
-        setDetectionCount(detections.length);
-        // Count per class
+      // --- Object Tracking Logic ---
+      const currentTime = Date.now();
+      const currentTracks = activeTracksRef.current;
+      const MAX_DISTANCE = 0.40; // Normalized maximum allowed distance to link a detection to an old track
+      const TIMEOUT_MS = 3000;   // How long to remember a track if we stop seeing it
+
+      // 1. Calculate centroids for new detections in normalized screen space (0-1)
+      const newCenters = detections.map(d => ({
+        ...d,
+        cx: ((d.x1 + d.x2) / 2) / video.videoWidth,
+        cy: ((d.y1 + d.y2) / 2) / video.videoHeight
+      }));
+
+      // 2. Match existing tracks to new detections based on shortest distance
+      const matchedDetectionIndices = new Set<number>();
+      for (const track of currentTracks) {
+        let bestDist = Infinity;
+        let bestIdx = -1;
+
+        for (let i = 0; i < newCenters.length; i++) {
+          if (matchedDetectionIndices.has(i)) continue;
+
+          const d = newCenters[i];
+          // Only match if it's the same class type!
+          if (d.classId !== track.classId) continue;
+
+          // Euclidean distance between normalized centroids (0-1 space)
+          const dist = Math.sqrt(Math.pow(d.cx - track.cx, 2) + Math.pow(d.cy - track.cy, 2));
+          if (dist < bestDist && dist < MAX_DISTANCE) {
+            bestDist = dist;
+            bestIdx = i;
+          }
+        }
+
+        if (bestIdx !== -1) {
+          // Found a match: Update track position and timestamp
+          const d = newCenters[bestIdx];
+          track.cx = d.cx;
+          track.cy = d.cy;
+          track.lastSeenTime = currentTime;
+
+          if (track.framesVisible === 0) {
+            // First time it is MATCHED (now seen in 2 consecutive inferences minimum)
+            // Graduating from "ghost" 1-frame track to "valid" track
+            totalValidTracksRef.current++;
+            if (track.className === "Ripe") totalRipeRef.current++;
+            else if (track.className === "Turning") totalTurningRef.current++;
+            else if (track.className === "Unripe") totalUnripeRef.current++;
+          }
+          track.framesVisible += 1;
+
+          matchedDetectionIndices.add(bestIdx);
+        }
+      }
+
+      // 3. Create new tracks for unmatched detections
+      for (let i = 0; i < newCenters.length; i++) {
+        if (!matchedDetectionIndices.has(i)) {
+          const d = newCenters[i];
+          currentTracks.push({
+            id: trackIdCounterRef.current++,
+            classId: d.classId,
+            className: d.className,
+            cx: d.cx,
+            cy: d.cy,
+            lastSeenTime: currentTime,
+            framesVisible: 0, // Starts at 0, must be matched at least once to become a "real" track
+            color: getBoxColor(d.className)
+          });
+        }
+      }
+
+      // 4. Remove expired tracks (strawberries that left the frame or were covered)
+      activeTracksRef.current = currentTracks.filter(t => (currentTime - t.lastSeenTime) < TIMEOUT_MS);
+      // Because inference is only 1 FPS, waiting >1 frame means a 2-second delay. We set it to 1 to feel responsive.
+      const activeStableTracks = activeTracksRef.current.filter(t => t.framesVisible >= 1);
+
+      // Update UI counts based on ACTIVE STABLE TRACKS instead of raw detections
+      if (activeStableTracks.length > 0) {
+        // Find highest confidence detection out of current raw detections for the main UI display
+        const topRaw = detections.length > 0 ? detections.reduce((a, b) => (a.score > b.score ? a : b)) : null;
+        if (topRaw) {
+          setTopDetection(topRaw.className);
+          setConf(topRaw.score);
+        }
+
+        setDetectionCount(activeStableTracks.length);
+
+        // Count ACTIVE tracks per class
         const counts: Record<string, number> = { Ripe: 0, Turning: 0, Unripe: 0 };
-        detections.forEach(d => { counts[d.className] = (counts[d.className] || 0) + 1; });
+        activeStableTracks.forEach(t => { counts[t.className] = (counts[t.className] || 0) + 1; });
         setClassCounts(counts);
+
+        // Update Session Stats 
+        // We track the *MAXIMUM ACTIVE* counted at any single moment, combining with historical memory
+        // But for totals, we use the strictly accumulated unique values
+        setSessionStats(prev => ({
+          ...prev,
+          Ripe: counts.Ripe,
+          Turning: counts.Turning,
+          Unripe: counts.Unripe,
+          framesAnalyzed: prev.framesAnalyzed + 1,
+          totalUniqueDetected: totalValidTracksRef.current,
+          totalRipe: totalRipeRef.current,
+          totalTurning: totalTurningRef.current,
+          totalUnripe: totalUnripeRef.current
+        }));
       } else {
         setTopDetection("-");
         setConf(0);
         setDetectionCount(0);
         setClassCounts({ Ripe: 0, Turning: 0, Unripe: 0 });
+        setSessionStats(prev => ({ ...prev, framesAnalyzed: prev.framesAnalyzed + 1 }));
       }
     } catch (e) {
       console.error("Inference error:", e);
     }
 
     inferenceRunningRef.current = false;
-    setIsProcessing(false);
   }
 
-  // --- Overlay render loop (only draws bounding boxes, very lightweight) ---
-  const renderOverlay = useCallback(() => {
+  // --- Overlay render loop (only draws bounding boxes AND tracking IDs) ---
+  const renderOverlay = useCallback(function drawOverlay() {
     const video = videoRef.current;
     const overlay = overlayRef.current;
     if (!video || !overlay) {
-      animFrameRef.current = requestAnimationFrame(renderOverlay);
+      animFrameRef.current = requestAnimationFrame(drawOverlay);
       return;
     }
 
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     if (vw === 0 || vh === 0) {
-      animFrameRef.current = requestAnimationFrame(renderOverlay);
+      animFrameRef.current = requestAnimationFrame(drawOverlay);
       return;
     }
 
@@ -226,19 +355,36 @@ export default function Home() {
     const ctx = overlay.getContext("2d")!;
     ctx.clearRect(0, 0, vw, vh);
 
-    // Draw bounding boxes from last inference result
+    // Draw bounding boxes from last inference result + tracking IDs
+    // We match bounding boxes to tracking IDs the same way for display purposes. Best effort.
     const dets = detectionsRef.current;
+    const activeTracks = activeTracksRef.current;
+
     for (const det of dets) {
       const color = getBoxColor(det.className);
       const bx = det.x1, by = det.y1, bw = det.x2 - det.x1, bh = det.y2 - det.y1;
+      const bcx = ((det.x1 + det.x2) / 2) / vw;
+      const bcy = ((det.y1 + det.y2) / 2) / vh;
+
+      // Attempt to find corresponding track ID just for display
+      let trackIdStr = "";
+      let minD = Infinity;
+      for (const t of activeTracks) {
+        if (t.classId !== det.classId) continue;
+        const d = Math.sqrt(Math.pow(bcx - t.cx, 2) + Math.pow(bcy - t.cy, 2));
+        if (d < minD && d < 0.3) {
+          minD = d;
+          trackIdStr = `#${t.id}`;
+        }
+      }
 
       // Box
       ctx.strokeStyle = color;
       ctx.lineWidth = 3;
       ctx.strokeRect(bx, by, bw, bh);
 
-      // Label
-      const text = `${det.className} ${(det.score * 100).toFixed(0)}%`;
+      // Label (include Track ID)
+      const text = `${det.className} ${trackIdStr} ${(det.score * 100).toFixed(0)}%`;
       ctx.font = "bold 14px Inter, sans-serif";
       const tw = ctx.measureText(text).width;
       const pad = 6;
@@ -253,12 +399,23 @@ export default function Home() {
       ctx.fillText(text, bx + pad, ly + 16);
     }
 
-    animFrameRef.current = requestAnimationFrame(renderOverlay);
+    animFrameRef.current = requestAnimationFrame(drawOverlay);
   }, []);
 
   // --- Start Camera ---
   async function startCamera() {
     setStatus("Requesting camera access...");
+
+    // Reset trackers
+    activeTracksRef.current = [];
+    trackIdCounterRef.current = 1;
+    totalValidTracksRef.current = 0;
+    totalRipeRef.current = 0;
+    totalTurningRef.current = 0;
+    totalUnripeRef.current = 0;
+    setSessionStats({ Ripe: 0, Turning: 0, Unripe: 0, framesAnalyzed: 0, totalUniqueDetected: 0, totalRipe: 0, totalTurning: 0, totalUnripe: 0 });
+    setShowSummary(false);
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -280,6 +437,41 @@ export default function Home() {
     } catch {
       setStatus("Camera access denied");
     }
+  }
+
+  // --- Stop Camera & Show Summary ---
+  function stopCamera() {
+    if (inferenceTimerRef.current) {
+      clearInterval(inferenceTimerRef.current);
+      inferenceTimerRef.current = null;
+    }
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = 0;
+    }
+
+    // Stop video tracks
+    const video = videoRef.current;
+    if (video && video.srcObject) {
+      const stream = video.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      video.srcObject = null;
+    }
+
+    // Clear canvas
+    const overlay = overlayRef.current;
+    if (overlay) {
+      const ctx = overlay.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, overlay.width, overlay.height);
+    }
+
+    setIsStreaming(false);
+    setStatus("Inspection Completed");
+    setTopDetection("-");
+    setConf(0);
+    setDetectionCount(0);
+    setClassCounts({ Ripe: 0, Turning: 0, Unripe: 0 });
+    setShowSummary(true);
   }
 
   // --- Boot ---
@@ -312,6 +504,68 @@ export default function Home() {
       </div>
 
       <div className="relative z-10 max-w-6xl mx-auto px-6 py-10 flex flex-col items-center gap-8">
+
+        {/* Full Screen Summary Modal */}
+        {showSummary && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xl" />
+            <div className="relative w-full max-w-lg bg-slate-900 border border-slate-700/50 rounded-3xl overflow-hidden shadow-2xl shadow-cyan-900/20 flex flex-col items-center p-8 animate-in fade-in zoom-in-95 duration-300">
+              <div className="w-16 h-16 rounded-full bg-cyan-500/20 border border-cyan-500/50 flex items-center justify-center mb-6">
+                <span className="text-3xl">📋</span>
+              </div>
+
+              <h2 className="text-3xl font-extrabold text-white mb-2 text-center">Inspection Summary</h2>
+              <p className="text-slate-400 text-center mb-6">
+                Analyzed <span className="text-white font-medium">{sessionStats.framesAnalyzed}</span> frames. <br />
+                Detected <span className="text-cyan-400 font-bold text-lg">{sessionStats.totalUniqueDetected}</span> individual strawberries.
+              </p>
+
+              <div className="w-full space-y-4 mb-8">
+                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider text-center">Total Breakdown by Ripeness</h3>
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex flex-col items-center shadow-inner shadow-red-500/5">
+                    <span className="text-2xl mb-1">🍓</span>
+                    <span className="text-2xl font-bold text-red-400">{sessionStats.totalRipe}</span>
+                    <span className="text-xs text-red-400/80 mt-1 uppercase tracking-wider font-semibold">Ripe</span>
+                  </div>
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex flex-col items-center shadow-inner shadow-amber-500/5">
+                    <span className="text-2xl mb-1">🟡</span>
+                    <span className="text-2xl font-bold text-amber-400">{sessionStats.totalTurning}</span>
+                    <span className="text-xs text-amber-400/80 mt-1 uppercase tracking-wider font-semibold">Turning</span>
+                  </div>
+                  <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4 flex flex-col items-center shadow-inner shadow-green-500/5">
+                    <span className="text-2xl mb-1">🟢</span>
+                    <span className="text-2xl font-bold text-green-400">{sessionStats.totalUnripe}</span>
+                    <span className="text-xs text-green-400/80 mt-1 uppercase tracking-wider font-semibold">Unripe</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* AI Assessment */}
+              <div className="w-full bg-slate-800/50 border border-slate-700/50 rounded-xl p-5 mb-8">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-cyan-400">✨</span>
+                  <h4 className="font-semibold text-cyan-400">AI Assessment</h4>
+                </div>
+                <p className="text-sm text-slate-300 leading-relaxed">
+                  {sessionStats.totalUniqueDetected === 0 ? "No strawberries were detected during this session."
+                    : sessionStats.totalRipe > Math.max(sessionStats.totalTurning, sessionStats.totalUnripe) ? "Batch is predominantly ripe and ready for harvest. Handle with care to prevent bruising."
+                      : sessionStats.totalTurning > sessionStats.totalRipe ? "Batch is currently turning. Optimal harvest window will open soon. Recommend waiting 1-2 days."
+                        : "Batch is predominantly unripe. Requires more time on the vine for development."}
+                </p>
+              </div>
+
+              <button
+                onClick={() => setShowSummary(false)}
+                className="w-full py-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold border border-slate-600 transition-colors"
+              >
+                Close & Start Over
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div className="text-center space-y-2">
           <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-red-400 via-pink-400 to-green-400">
@@ -390,8 +644,12 @@ export default function Home() {
             </div>
 
             {/* Strawberry Count */}
-            <div className="p-4 rounded-2xl border border-slate-700/50 bg-slate-800/30 backdrop-blur-md">
-              <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Strawberry Count</h3>
+            <div className="p-4 rounded-2xl border border-slate-700/50 bg-slate-800/30 backdrop-blur-md relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-3 opacity-20">
+                {isStreaming && <span className="text-xs font-mono uppercase tracking-widest text-cyan-500 font-bold tracking-indicator">Tracking Active</span>}
+              </div>
+
+              <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Currently Tracked</h3>
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-400" /> Ripe 🍓</div>
@@ -426,13 +684,14 @@ export default function Home() {
                   Start Strawberry Detection
                 </button>
               ) : (
-                <div className="w-full py-4 rounded-xl bg-slate-700/50 border border-slate-600 text-slate-300 font-medium flex items-center justify-center gap-2 cursor-not-allowed">
-                  <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  {isProcessing ? "Processing..." : "System Running..."}
-                </div>
+                <button
+                  onClick={stopCamera}
+                  className="w-full py-4 rounded-xl relative group overflow-hidden bg-slate-800 border border-red-500/30 hover:border-red-500/60 shadow-lg shadow-red-900/10 transition-all active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-red-600/10 to-orange-600/10 group-hover:from-red-600/20 group-hover:to-orange-600/20 transition-all" />
+                  <div className="w-3 h-3 rounded-sm bg-red-500 relative z-10 animate-pulse" />
+                  <span className="text-red-400 font-bold relative z-10 group-hover:text-red-300 transition-colors">Stop Inspection & View Summary</span>
+                </button>
               )}
               <p className="text-xs text-slate-500 text-center leading-relaxed">
                 All processing runs locally in your browser via WebAssembly. No data is sent to any server.
