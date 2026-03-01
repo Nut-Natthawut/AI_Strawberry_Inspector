@@ -549,10 +549,10 @@ export default function Home() {
                   <h4 className="font-semibold text-cyan-400">AI Assessment</h4>
                 </div>
                 <p className="text-sm text-slate-300 leading-relaxed">
-                  {sessionStats.totalUniqueDetected === 0 ? "No strawberries were detected during this session."
-                    : sessionStats.totalRipe > Math.max(sessionStats.totalTurning, sessionStats.totalUnripe) ? "Batch is predominantly ripe and ready for harvest. Handle with care to prevent bruising."
-                      : sessionStats.totalTurning > sessionStats.totalRipe ? "Batch is currently turning. Optimal harvest window will open soon. Recommend waiting 1-2 days."
-                        : "Batch is predominantly unripe. Requires more time on the vine for development."}
+                  {sessionStats.totalUniqueDetected === 0 ? "ไม่พบสตรอว์เบอร์รีในระหว่างการตรวจสอบครั้งนี้"
+                    : sessionStats.totalRipe > Math.max(sessionStats.totalTurning, sessionStats.totalUnripe) ? "ผลผลิตส่วนใหญ่สุกและพร้อมเก็บเกี่ยวแล้ว โปรดจัดเก็บอย่างระมัดระวังเพื่อป้องกันรอยช้ำ"
+                      : sessionStats.totalTurning > sessionStats.totalRipe ? "ผลผลิตกำลังเปลี่ยนสี (เริ่มสุก) ช่วงเวลาเก็บเกี่ยวที่เหมาะสมที่สุดกำลังจะมาถึง แนะนำให้รอประมาณ 1-2 วัน"
+                        : "ผลผลิตส่วนใหญ่ยังดิบอยู่ จำเป็นต้องใช้ระยะเวลาในการเจริญเติบโตบนต้นเพิ่มเติม"}
                 </p>
               </div>
 
