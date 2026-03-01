@@ -4,8 +4,8 @@
 
 โปรเจกต์นี้ทำงานด้วยโมเดล AI Object Detection (YOLOv11) ซึ่งถูกประมวลผล **ภายในเบราว์เซอร์ 100% (Client-side)** ผ่าน ONNX Runtime WebAssembly ทำให้มีความปลอดภัยและเป็นส่วนตัวสูง ไม่มีการส่งภาพหรือข้อมูลใดๆ กลับไปยังเซิร์ฟเวอร์
 
-![Strawberry Inspector Demo](https://images.unsplash.com/photo-1543158019-94dbf06ea317?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80) 
-*(ภาพประกอบ: การตรวจจับสตรอว์เบอร์รี)*
+![Strawberry Inspector Demo](public/assets/demo.png)
+*(ภาพประกอบ: หน้าจอสรุปผลการตรวจวิเคราะห์สตรอว์เบอร์รี)*
 
 ---
 
