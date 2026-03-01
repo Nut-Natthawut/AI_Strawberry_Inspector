@@ -1,8 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🍓 AI Strawberry Inspector
 
-## Getting Started
+**AI Strawberry Inspector** เป็น Web Application สำหรับใช้ตรวจจับและวิเคราะห์คุณภาพของสตรอว์เบอร์รีแบบเรียลไทม์ผ่านกล้อง (Webcam/Mobile Camera) โดยแบ่งความสุกออกเป็น 3 ระดับ ได้แก่ **Ripe (สุก)**, **Turning (กำลังเปลี่ยนสี)**, และ **Unripe (ดิบ)** 
 
-First, run the development server:
+โปรเจกต์นี้ทำงานด้วยโมเดล AI Object Detection (YOLOv11) ซึ่งถูกประมวลผล **ภายในเบราว์เซอร์ 100% (Client-side)** ผ่าน ONNX Runtime WebAssembly ทำให้มีความปลอดภัยและเป็นส่วนตัวสูง ไม่มีการส่งภาพหรือข้อมูลใดๆ กลับไปยังเซิร์ฟเวอร์
+
+![Strawberry Inspector Demo](https://images.unsplash.com/photo-1543158019-94dbf06ea317?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80) 
+*(ภาพประกอบ: การตรวจจับสตรอว์เบอร์รี)*
+
+---
+
+## ✨ Features (จุดเด่น)
+
+- ⚡ **Real-time Detection:** วิเคราะห์ภาพจากกล้องสดๆ ทันที
+- 🧠 **In-Browser AI Inference:** รันโมเดล YOLOv11 แบบ Local บนเครื่องผู้ใช้ผ่าน WebAssembly (WASM) 
+- 🎯 **Smart Object Tracking:** มีระบบจดจำสตรอว์เบอร์รีแต่ละลูก (Centroid Tracking) ถึงแม้กล้องจะสั่นก็ไม่นับลูกซ้ำ (ป้องกันปัญหา Flickering หรือ Overcounting)
+- 📊 **Session Summary:** สรุปผลการตรวจวิเคราะห์เมื่อกดหยุดกล้อง พร้อมแยกสถิติผลรวมสะสม (Total Breakdown) ว่าเจอสายพันธุ์หรือความสุกระดับไหนไปกี่ลูก
+- 🤖 **AI Assessment:** ให้คำแนะนำอัตโนมัติตามสัดส่วนของสตรอว์เบอร์รีที่เจอ (เช่น "รอบนี้ส่วนใหญ่เป็นผลสุก ควรเก็บเกี่ยวอย่างระมัดระวัง")
+- 🎨 **Premium UI Dark Mode:** ออกแบบอินเทอร์เฟซด้วย TailwindCSS ที่มีความทันสมัย สวยงาม ดูล้ำลึก สไตล์ Neon / Glassmorphism
+
+---
+
+## 🛠️ Tech Stack
+
+- **Framework:** [Next.js](https://nextjs.org/) (React 19)
+- **Styling:** [Tailwind CSS](https://tailwindcss.com/)
+- **AI Model:** [YOLOv11](https://docs.ultralytics.com/) (Custom trained on Strawberry Dataset)
+- **AI Runtime:** [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/)
+- **Language:** TypeScript 
+
+---
+
+## 🚀 Getting Started (วิธีการติดตั้งและรันโปรเจกต์)
+
+### Prerequisites
+
+โปรดตรวจสอบให้แน่ใจว่าคุณติดตั้ง Node.js เวอร์ชันล่าสุดแล้ว (แนะนำ v18+)
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/your-username/ai-strawberry-inspector.git
+cd ai-strawberry-inspector
+```
+
+### 2. Install dependencies
+
+```bash
+npm install
+# or
+yarn install
+# or
+pnpm install
+```
+
+### 3. Run the development server
 
 ```bash
 npm run dev
@@ -10,27 +61,33 @@ npm run dev
 yarn dev
 # or
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+เปิดเบราว์เซอร์ไปที่ [http://localhost:3000](http://localhost:3000) เพื่อเริ่มใช้งานแอปพลิเคชัน 
+> 💡 *หมายเหตุ: โปรดอนุญาตการเข้าถึงกล้อง (Camera Permission) เมื่อเบราว์เซอร์ร้องขอ*
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 📂 Project Structure (โครงสร้างหลัก)
 
-## Learn More
+- `src/app/page.tsx`: หน้าจอหลัก (UI) การจัดการ State กล้อง ระบบ Object Tracking และแสดงผล Summary
+- `src/app/inference.worker.ts`: (Optional) Web Worker สำหรับแยกการประมวลผลโมเดลออกจาก Main Thread เพื่อไม่ให้ UI กระตุก
+- `public/models/best_3class.onnx`: ไฟล์โมเดล YOLOv11 ที่ถูกแปลงเป็น ONNX สำหรับรันบนเว็บ
+- `public/models/classes.json`: ไฟล์ชื่อคลาสเป้าหมาย (`Ripe`, `Turning`, `Unripe`)
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 🤝 Contributing
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+หากสนใจพัฒนาต่อ หรือช่วยปรับปรุงความแม่นยำของโมเดล:
+1. Fork repository นี้
+2. สร้าง Branch ใหม่สำหรับฟีเจอร์ของคุณ (`git checkout -b feature/AmazingFeature`)
+3. Commit การเปลี่ยนแปลง (`git commit -m 'Add some AmazingFeature'`)
+4. Push ไปยัง Branch ดังกล่าว (`git push origin feature/AmazingFeature`)
+5. เปิด Pull Request สร้างสรรค์ผลงานร่วมกัน!
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 📜 License
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Distributed under the MIT License. See `LICENSE` for more information.
