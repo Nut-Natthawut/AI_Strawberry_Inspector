@@ -46,6 +46,7 @@ export default function Home() {
   const [classCounts, setClassCounts] = useState<Record<string, number>>({ Ripe: 0, Turning: 0, Unripe: 0 });
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [showSummary, setShowSummary] = useState<boolean>(false);
+  const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
 
   // Tracking unique strawberries seen over the entire session
   const [sessionStats, setSessionStats] = useState({
@@ -66,6 +67,7 @@ export default function Home() {
   const activeTracksRef = useRef<Track[]>([]);
   const trackIdCounterRef = useRef<number>(1);
   const totalValidTracksRef = useRef<number>(0);
+  const facingModeRef = useRef<"environment" | "user">("environment");
 
   // Accumulated unique totals by class
   const totalRipeRef = useRef<number>(0);
@@ -378,10 +380,13 @@ export default function Home() {
         }
       }
 
+      // Flip the box visually if front camera (mirror effect) so text stays readable
+      const displayBx = facingModeRef.current === "user" ? vw - det.x2 : bx;
+
       // Box
       ctx.strokeStyle = color;
       ctx.lineWidth = 3;
-      ctx.strokeRect(bx, by, bw, bh);
+      ctx.strokeRect(displayBx, by, bw, bh);
 
       // Label (include Track ID)
       const text = `${det.className} ${trackIdStr} ${(det.score * 100).toFixed(0)}%`;
@@ -393,34 +398,50 @@ export default function Home() {
 
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.roundRect(bx, ly, tw + pad * 2, lh, 4);
+      ctx.roundRect(displayBx, ly, tw + pad * 2, lh, 4);
       ctx.fill();
       ctx.fillStyle = "#000";
-      ctx.fillText(text, bx + pad, ly + 16);
+      ctx.fillText(text, displayBx + pad, ly + 16);
     }
 
     animFrameRef.current = requestAnimationFrame(drawOverlay);
   }, []);
 
   // --- Start Camera ---
-  async function startCamera() {
+  async function startCamera(preserveStats: boolean = false) {
     setStatus("Requesting camera access...");
 
-    // Reset trackers
-    activeTracksRef.current = [];
-    trackIdCounterRef.current = 1;
-    totalValidTracksRef.current = 0;
-    totalRipeRef.current = 0;
-    totalTurningRef.current = 0;
-    totalUnripeRef.current = 0;
-    setSessionStats({ Ripe: 0, Turning: 0, Unripe: 0, framesAnalyzed: 0, totalUniqueDetected: 0, totalRipe: 0, totalTurning: 0, totalUnripe: 0 });
-    setShowSummary(false);
+    if (!preserveStats) {
+      // Reset trackers only if it's a completely fresh start (not just a camera flip)
+      activeTracksRef.current = [];
+      trackIdCounterRef.current = 1;
+      totalValidTracksRef.current = 0;
+      totalRipeRef.current = 0;
+      totalTurningRef.current = 0;
+      totalUnripeRef.current = 0;
+      setSessionStats({ Ripe: 0, Turning: 0, Unripe: 0, framesAnalyzed: 0, totalUniqueDetected: 0, totalRipe: 0, totalTurning: 0, totalUnripe: 0 });
+      setShowSummary(false);
+    }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: facingModeRef.current, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
+
+      // Auto-detect actual facing mode to fix mirroring on desktop laptops.
+      // If it's a desktop webcam, facingMode is often undefined in settings. We default to 'user' so it acts like a mirror.
+      if (stream.getVideoTracks().length > 0) {
+        const track = stream.getVideoTracks()[0];
+        const settings = track.getSettings();
+        const actualFacingMode = settings.facingMode || "user";
+
+        if (actualFacingMode !== facingModeRef.current) {
+          facingModeRef.current = actualFacingMode as "environment" | "user";
+          setFacingMode(facingModeRef.current);
+        }
+      }
+
       if (!videoRef.current) return;
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
@@ -441,6 +462,18 @@ export default function Home() {
 
   // --- Stop Camera & Show Summary ---
   function stopCamera() {
+    stopCurrentStream();
+    setIsStreaming(false);
+    setStatus("Inspection Completed");
+    setTopDetection("-");
+    setConf(0);
+    setDetectionCount(0);
+    setClassCounts({ Ripe: 0, Turning: 0, Unripe: 0 });
+    setShowSummary(true);
+  }
+
+  // Helper function to stop tracks without triggering the summary modal (useful for switching cameras)
+  function stopCurrentStream() {
     if (inferenceTimerRef.current) {
       clearInterval(inferenceTimerRef.current);
       inferenceTimerRef.current = null;
@@ -464,14 +497,18 @@ export default function Home() {
       const ctx = overlay.getContext("2d");
       if (ctx) ctx.clearRect(0, 0, overlay.width, overlay.height);
     }
+  }
 
-    setIsStreaming(false);
-    setStatus("Inspection Completed");
-    setTopDetection("-");
-    setConf(0);
-    setDetectionCount(0);
-    setClassCounts({ Ripe: 0, Turning: 0, Unripe: 0 });
-    setShowSummary(true);
+  // --- Switch Camera ---
+  function toggleCamera() {
+    stopCurrentStream();
+    setFacingMode(prev => {
+      const newMode = prev === "environment" ? "user" : "environment";
+      facingModeRef.current = newMode;
+      // Using setTimeout to let React state update before requesting the camera again
+      setTimeout(() => startCamera(true), 100);
+      return newMode;
+    });
   }
 
   // --- Boot ---
@@ -586,6 +623,7 @@ export default function Home() {
             <video
               ref={videoRef}
               className={`w-full h-full object-cover ${isStreaming ? "block" : "hidden"}`}
+              style={{ transform: facingMode === "user" ? "scaleX(-1)" : "none" }}
               playsInline
               muted
             />
@@ -611,8 +649,21 @@ export default function Home() {
               {status}
             </div>
 
+            {/* Flip Camera Button */}
+            {isStreaming && (
+              <button
+                onClick={toggleCamera}
+                title="Switch Camera"
+                className="absolute top-4 right-4 p-2 md:p-3 rounded-full bg-black/60 backdrop-blur-md text-white border border-white/10 hover:bg-slate-800 transition-colors z-20 flex items-center justify-center shadow-lg active:scale-95"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            )}
+
             {isStreaming && detectionCount > 0 && (
-              <div className="absolute top-4 right-4 px-3 py-1 rounded-full bg-black/60 backdrop-blur-md text-xs font-medium border border-white/10 z-20">
+              <div className="absolute bottom-4 left-4 px-3 py-1 rounded-full bg-black/60 backdrop-blur-md text-xs font-medium border border-white/10 z-20">
                 {detectionCount} detected
               </div>
             )}
@@ -675,7 +726,7 @@ export default function Home() {
               <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Control Center</h3>
               {!isStreaming ? (
                 <button
-                  onClick={startCamera}
+                  onClick={() => startCamera(false)}
                   className="w-full py-4 rounded-xl bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-400 hover:to-pink-500 text-white font-bold shadow-lg shadow-red-500/25 transition-all active:scale-95 flex items-center justify-center gap-2"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
